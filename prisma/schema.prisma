@@ -1,0 +1,173 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+  GITHUB
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+  DELETED
+}
+
+enum EmailStatus {
+  UNVERIFIED
+  VERIFIED
+  BLOCKED
+}
+
+enum AppearanceType {
+  COLOR
+  IMAGE
+}
+
+enum AuthTokenType {
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
+}
+
+model User {
+  id        String @id @default(uuid()) @db.Uuid
+  firstName String
+  lastName  String
+  email     String @unique
+
+  accounts            Account[]
+  status              UserStatus           @default(ACTIVE)
+  emailStatus         EmailStatus          @default(UNVERIFIED)
+  emailChangeRequests EmailChangeRequest[]
+
+  loginCount    Int @default(0)
+  loginAttempts Int @default(0)
+
+  lockoutUntil DateTime?
+  lastLoginAt  DateTime?
+
+  refreshTokens RefreshToken[]
+  authTokens    AuthToken[]
+
+  profile  UserProfile?
+  settings UserSettings?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+model EmailChangeRequest {
+  id String @id @default(uuid())
+
+  newEmail String @unique
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([newEmail])
+}
+
+model UserProfile {
+  id String @id @default(uuid()) @db.Uuid
+
+  displayName String?
+  bio         String?
+
+  profileType  AppearanceType @default(COLOR)
+  profileValue String?
+
+  coverType  AppearanceType @default(COLOR)
+  coverValue String?
+
+  userId String @unique @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model UserSettings {
+  id String @id @default(uuid()) @db.Uuid
+
+  darkMode Boolean @default(false)
+
+  userId String @unique @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id String @id @default(uuid())
+
+  provider          AuthProvider
+  providerAccountId String
+  passwordHash      String?
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, providerAccountId])
+  @@unique([userId, provider])
+  @@index([provider])
+}
+
+model AuthToken {
+  id String @id @default(uuid())
+
+  tokenHash String        @unique
+  type      AuthTokenType
+
+  expiresAt DateTime
+  usedAt    DateTime?
+  revokedAt DateTime?
+
+  ipAddress String?
+  userAgent String?
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([type])
+  @@index([usedAt])
+  @@index([revokedAt])
+  @@index([type, expiresAt])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  token     String   @unique
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}

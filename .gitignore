@@ -1,0 +1,49 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Ignore environment files for both backend and frontend
+/.env
+
+# Ignore logs
+*.log
+
+# Ignore IDE/editor-specific files
+.vscode/
+.idea/
+.DS_Store  # For macOS users
+Thumbs.db  # For Windows users
+
+# Ignore npm debug files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Ignore coverage reports
+/coverage
+
+
+/src/generated/prisma
+
+/src/generated/prisma
