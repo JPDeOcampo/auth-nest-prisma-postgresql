@@ -7,10 +7,19 @@ datasource db {
   provider = "postgresql"
 }
 
+// ─────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────
+
 enum AuthProvider {
   LOCAL
   GOOGLE
   GITHUB
+}
+
+enum UserRole {
+  USER
+  ADMIN
 }
 
 enum UserStatus {
@@ -36,25 +45,35 @@ enum AuthTokenType {
   EMAIL_VERIFICATION
 }
 
+// ─────────────────────────────────────────────────────────────
+// User
+// ─────────────────────────────────────────────────────────────
+
 model User {
   id        String @id @default(uuid()) @db.Uuid
-  firstName String
-  lastName  String
-  email     String @unique
+  firstName String @db.VarChar(100)
+  lastName  String @db.VarChar(100)
 
-  accounts            Account[]
-  status              UserStatus           @default(ACTIVE)
-  emailStatus         EmailStatus          @default(UNVERIFIED)
-  emailChangeRequests EmailChangeRequest[]
+  // Always store lowercase + trimmed (normalize in the app, enforced by CHECK below)
+  email String @unique @db.VarChar(255)
 
-  loginCount    Int @default(0)
-  loginAttempts Int @default(0)
+  role        UserRole    @default(USER)
+  status      UserStatus  @default(ACTIVE)
+  emailStatus EmailStatus @default(UNVERIFIED)
 
-  lockoutUntil DateTime?
-  lastLoginAt  DateTime?
+  emailVerifiedAt   DateTime?
+  passwordChangedAt DateTime? // revoke sessions/tokens issued before this
+  deletedAt         DateTime? // set when status = DELETED (soft delete)
 
-  refreshTokens RefreshToken[]
-  authTokens    AuthToken[]
+  loginCount    Int       @default(0)
+  loginAttempts Int       @default(0)
+  lockoutUntil  DateTime?
+  lastLoginAt   DateTime?
+
+  accounts           Account[]
+  refreshTokens      RefreshToken[]
+  authTokens         AuthToken[]
+  emailChangeRequest EmailChangeRequest?
 
   profile  UserProfile?
   settings UserSettings?
@@ -65,35 +84,48 @@ model User {
   @@index([status])
 }
 
+// ─────────────────────────────────────────────────────────────
+// Email change (one pending request per user)
+// ─────────────────────────────────────────────────────────────
+
 model EmailChangeRequest {
-  id String @id @default(uuid())
+  id String @id @default(uuid()) @db.Uuid
 
-  newEmail String @unique
+  // NOT unique: otherwise one user could "reserve" an address and block others.
+  // User.email's unique constraint protects user at confirmation time.
+  newEmail String @db.VarChar(255)
 
-  userId String @db.Uuid
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  confirmedAt DateTime?
+
+  ipAddress String? @db.VarChar(45)
+  userAgent String? @db.VarChar(512)
+
+  userId String @unique @db.Uuid
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  ipAddress String?
-  userAgent String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([userId])
-  @@index([newEmail])
+  @@index([expiresAt])
 }
+
+// ─────────────────────────────────────────────────────────────
+// Profile & settings
+// ─────────────────────────────────────────────────────────────
 
 model UserProfile {
   id String @id @default(uuid()) @db.Uuid
 
-  displayName String?
-  bio         String?
+  displayName String? @db.VarChar(100)
+  bio         String? @db.VarChar(500)
 
   profileType  AppearanceType @default(COLOR)
-  profileValue String?
+  profileValue String?        @db.VarChar(2048)
 
   coverType  AppearanceType @default(COLOR)
-  coverValue String?
+  coverValue String?        @db.VarChar(2048)
 
   userId String @unique @db.Uuid
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -114,12 +146,21 @@ model UserSettings {
   updatedAt DateTime @updatedAt
 }
 
-model Account {
-  id String @id @default(uuid())
+// ─────────────────────────────────────────────────────────────
+// Accounts (credentials / OAuth identities)
+// ─────────────────────────────────────────────────────────────
 
-  provider          AuthProvider
-  providerAccountId String
-  passwordHash      String?
+model Account {
+  id String @id @default(uuid()) @db.Uuid
+
+  provider AuthProvider
+
+  // LOCAL: use the user's id. OAuth: the provider's subject id.
+  // (Avoid using email for LOCAL so email changes don't need a sync.)
+  providerAccountId String @db.VarChar(255)
+
+  // argon2id hash. Only for LOCAL (enforced by CHECK below)
+  passwordHash String?
 
   userId String @db.Uuid
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -132,18 +173,22 @@ model Account {
   @@index([provider])
 }
 
-model AuthToken {
-  id String @id @default(uuid())
+// ─────────────────────────────────────────────────────────────
+// One-time tokens (password reset, email verification)
+// ─────────────────────────────────────────────────────────────
 
-  tokenHash String        @unique
+model AuthToken {
+  id String @id @default(uuid()) @db.Uuid
+
+  tokenHash String        @unique // SHA-256 of a randomBytes(32) token
   type      AuthTokenType
 
   expiresAt DateTime
   usedAt    DateTime?
   revokedAt DateTime?
 
-  ipAddress String?
-  userAgent String?
+  ipAddress String? @db.VarChar(45)
+  userAgent String? @db.VarChar(512)
 
   userId String @db.Uuid
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -151,23 +196,56 @@ model AuthToken {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([userId])
-  @@index([expiresAt])
-  @@index([type])
-  @@index([usedAt])
-  @@index([revokedAt])
-  @@index([type, expiresAt])
+  @@index([userId, type])
+  @@index([type, expiresAt]) // cleanup job + lookups
 }
 
-model RefreshToken {
-  id        String   @id @default(uuid()) @db.Uuid
-  userId    String   @db.Uuid
-  token     String   @unique
-  createdAt DateTime @default(now())
-  expiresAt DateTime
+// ─────────────────────────────────────────────────────────────
+// Refresh tokens (rotation + reuse detection)
+// ─────────────────────────────────────────────────────────────
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+model RefreshToken {
+  id String @id @default(uuid()) @db.Uuid
+
+  tokenHash String @unique // never store the raw token
+
+  // All tokens descended from one login share a familyId.
+  // If a revoked token is presented again, revoke the whole family.
+  familyId     String  @db.Uuid
+  replacedById String? @db.Uuid
+
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  ipAddress String? @db.VarChar(45)
+  userAgent String? @db.VarChar(512)
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
 
   @@index([userId])
-  @@index([token])
+  @@index([familyId])
+  @@index([expiresAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Audit log (no FK on purpose: keep history after user deletion)
+// ─────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String? @db.Uuid
+  event  String  @db.VarChar(64) // e.g. LOGIN_SUCCESS, LOGIN_FAILED, PASSWORD_CHANGED, TOKEN_REUSE
+
+  ipAddress String? @db.VarChar(45)
+  userAgent String? @db.VarChar(512)
+  metadata  Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([event, createdAt])
 }

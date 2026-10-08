@@ -76,6 +76,95 @@ export class EmailVerificationService {
     return expiresAt;
   }
 
+  /**
+   * Creates/updates the 1-1 EmailChangeRequest together with its
+   * EMAIL_VERIFICATION AuthToken (both share the same hash/expiry) and
+   * emails the verification link to the *new* address.
+   */
+  async sendEmailChange(
+    user: VerificationUser,
+    newEmail: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ) {
+    const { token, hashedToken, expiresAt } =
+      await this.tokenInfrastructure.generateSecureToken();
+
+    const emailChangeRequest = await this.prisma.emailChangeRequest.upsert({
+      where: { userId: user.id },
+      create: {
+        userId: user.id,
+        newEmail,
+        tokenHash: hashedToken,
+        expiresAt,
+        ipAddress: ipAddress ?? null,
+        userAgent: userAgent ?? null,
+      },
+      update: {
+        newEmail,
+        tokenHash: hashedToken,
+        expiresAt,
+        confirmedAt: null,
+        ipAddress: ipAddress ?? null,
+        userAgent: userAgent ?? null,
+      },
+      select: {
+        id: true,
+        userId: true,
+        newEmail: true,
+        expiresAt: true,
+        ipAddress: true,
+        userAgent: true,
+      },
+    });
+
+    const existingToken = await this.prisma.authToken.findFirst({
+      where: {
+        userId: user.id,
+        type: "EMAIL_VERIFICATION",
+        usedAt: null,
+        revokedAt: null,
+      },
+    });
+
+    if (existingToken) {
+      await this.prisma.authToken.update({
+        where: { id: existingToken.id },
+        data: { tokenHash: hashedToken, expiresAt, ipAddress, userAgent },
+      });
+    } else {
+      await this.prisma.authToken.create({
+        data: {
+          userId: user.id,
+          type: "EMAIL_VERIFICATION",
+          tokenHash: hashedToken,
+          expiresAt,
+          ipAddress,
+          userAgent,
+        },
+      });
+    }
+
+    const verificationLink =
+      `${process.env.BACKEND_URL}/api/v1/auth/verify-email?token=${token}`;
+
+    const emailSent = await this.mailer.send({
+      to: newEmail,
+      subject: "Verify Your New Email",
+      html: verifyEmailTemplate({
+        firstName: user.firstName,
+        verificationLink,
+        loginCount: user.loginCount,
+      }),
+    });
+
+    if (!emailSent) {
+      throw new AppError("Failed to send verification email", 500);
+    }
+
+    return { emailChangeRequest, expiresAt };
+  }
+
   async verify(token: string) {
     const { hashedToken } = this.tokenInfrastructure.generateSecureToken({
       token,
@@ -96,38 +185,33 @@ export class EmailVerificationService {
       return false;
     }
 
-    const emailChangeRequest = await this.prisma.emailChangeRequest.findFirst({
-      where: { userId: authToken.user.id },
-    });
+    const emailChangeRequest =
+      await this.prisma.emailChangeRequest.findUnique({
+        where: { userId: authToken.user.id },
+      });
 
     if (emailChangeRequest) {
+      // LOCAL accounts are keyed by user id (not email), so only the
+      // User row needs the new address.
       await this.prisma.$transaction([
         this.prisma.user.update({
           where: { id: authToken.user.id },
-          data: { email: emailChangeRequest.newEmail },
-        }),
-        this.prisma.account.update({
-          where: {
-            userId_provider: {
-              userId: authToken.user.id,
-              provider: "LOCAL",
-            },
+          data: {
+            email: emailChangeRequest.newEmail,
+            emailStatus: "VERIFIED",
+            emailVerifiedAt: new Date(),
           },
-          data: { providerAccountId: emailChangeRequest.newEmail },
         }),
         this.prisma.authToken.delete({ where: { id: authToken.id } }),
         this.prisma.emailChangeRequest.delete({
-          where: {
-            userId: authToken.user.id,
-            newEmail: emailChangeRequest.newEmail,
-          },
+          where: { userId: authToken.user.id },
         }),
       ]);
     } else {
       await this.prisma.$transaction([
         this.prisma.user.update({
           where: { id: authToken.user.id },
-          data: { emailStatus: "VERIFIED" },
+          data: { emailStatus: "VERIFIED", emailVerifiedAt: new Date() },
         }),
         this.prisma.authToken.delete({ where: { id: authToken.id } }),
       ]);

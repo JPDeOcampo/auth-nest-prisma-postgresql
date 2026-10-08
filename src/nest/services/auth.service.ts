@@ -40,36 +40,38 @@ export class NestAuthService {
     }
 
     const passwordHash = await hashPassword(password);
-    const user = await this.prisma.user.create({
-      data: {
-        firstName,
-        lastName,
-        email: normalizedEmail,
-        loginCount: 0,
-        accounts: {
-          create: {
-            provider: "LOCAL",
-            providerAccountId: normalizedEmail,
-            passwordHash,
+    const created = await this.prisma.$transaction(async (tx) => {
+      const newUser = await tx.user.create({
+        data: {
+          firstName,
+          lastName,
+          email: normalizedEmail,
+          loginCount: 0,
+          profile: {
+            create: {
+              profileType: "COLOR",
+              profileValue: randomColorHex(),
+            },
+          },
+          settings: {
+            create: {},
           },
         },
-        profile: {
-          create: {
-            profileType: "COLOR",
-            profileValue: randomColorHex(),
-          },
+        select: { id: true, email: true, firstName: true, loginCount: true },
+      });
+      // LOCAL accounts are keyed by user id so email changes need no sync
+      // (see schema comment on Account.providerAccountId).
+      await tx.account.create({
+        data: {
+          userId: newUser.id,
+          provider: "LOCAL",
+          providerAccountId: newUser.id,
+          passwordHash,
         },
-        settings: {
-          create: {},
-        },
-      },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        loginCount: true,
-      },
+      });
+      return newUser;
     });
+    const user = created;
 
     return this.emailVerificationService.send(user, ipAddress, userAgent);
   }
@@ -79,19 +81,21 @@ export class NestAuthService {
     const normalizedEmail = email.toLowerCase().trim();
     const authError = new AppError("Invalid email or password.", 401);
 
-    const account = await this.prisma.account.findFirst({
-      where: {
-        provider: "LOCAL",
-        providerAccountId: normalizedEmail,
-      },
-      include: { user: true },
+    const user = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
     });
 
-    if (!account?.user) {
+    if (!user) {
       throw authError;
     }
 
-    const user = account.user;
+    const account = await this.prisma.account.findFirst({
+      where: { userId: user.id, provider: "LOCAL" },
+    });
+
+    if (!account) {
+      throw authError;
+    }
     const now = new Date();
 
     if (user.status !== "ACTIVE") {
@@ -183,7 +187,10 @@ export class NestAuthService {
 
     const { accessToken, refreshToken } =
       await this.sessionTokenService.generateAuthTokens(user.id);
-    await this.sessionTokenService.createSession(user.id, refreshToken);
+    await this.sessionTokenService.createSession(user.id, refreshToken, {
+      ipAddress,
+      userAgent,
+    });
 
     const updatedUser = await this.prisma.user.update({
       where: { id: user.id },
@@ -272,7 +279,7 @@ export class NestAuthService {
     if (emailVerified) {
       await this.prisma.user.update({
         where: { id: user.id },
-        data: { emailStatus: "VERIFIED" },
+        data: { emailStatus: "VERIFIED", emailVerifiedAt: new Date() },
       });
     }
 
@@ -326,32 +333,18 @@ export class NestAuthService {
       throw new AppError("The email is already taken.", 400);
     }
 
-    const emailChangeRequest = await this.prisma.emailChangeRequest.create({
-      data: {
-        newEmail: normalizedEmail,
-        ipAddress: ipAddress ?? null,
-        userAgent: userAgent ?? null,
-        user: { connect: { id: userId } },
-      },
-      select: {
-        id: true,
-        userId: true,
-        newEmail: true,
-        ipAddress: true,
-        userAgent: true,
-      },
-    });
-
-    const expiresAt = await this.emailVerificationService.send(
-      {
-        id: userId,
-        email: normalizedEmail,
-        firstName: currentUser.firstName,
-        loginCount: currentUser.loginCount,
-      },
-      ipAddress,
-      userAgent,
-    );
+    const { emailChangeRequest, expiresAt } =
+      await this.emailVerificationService.sendEmailChange(
+        {
+          id: userId,
+          email: normalizedEmail,
+          firstName: currentUser.firstName,
+          loginCount: currentUser.loginCount,
+        },
+        normalizedEmail,
+        ipAddress,
+        userAgent,
+      );
 
     return {
       emailChangeRequest,
@@ -374,9 +367,24 @@ export class NestAuthService {
       throw new AppError("No email verification token found.", 404);
     }
 
+    const pending = await this.prisma.emailChangeRequest.findUnique({
+      where: { userId },
+    });
+
+    if (!pending) {
+      throw new AppError("No email change request found.", 404);
+    }
+
+    if (
+      normalizedEmail &&
+      pending.newEmail.toLowerCase() !== normalizedEmail
+    ) {
+      throw new AppError("Email does not match the pending request.", 400);
+    }
+
     await this.prisma.authToken.delete({ where: { id: authToken.id } });
     return this.prisma.emailChangeRequest.delete({
-      where: { userId, newEmail: normalizedEmail },
+      where: { userId },
     });
   }
 

@@ -3,14 +3,18 @@ export const USER_SELECT = {
   email: true,
   firstName: true,
   lastName: true,
+  role: true,
+  status: true,
   loginCount: true,
   lastLoginAt: true,
   emailStatus: true,
-  emailChangeRequests: {
+  emailVerifiedAt: true,
+  emailChangeRequest: {
     select: {
       id: true,
       userId: true,
       newEmail: true,
+      expiresAt: true,
       ipAddress: true,
       userAgent: true,
     },

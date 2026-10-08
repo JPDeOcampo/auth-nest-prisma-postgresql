@@ -13,8 +13,8 @@ export class LogoutService {
     }
 
     const { hashedToken } = generateSecureToken({ token });
-    return this.prisma.refreshToken.delete({
-      where: { token: hashedToken },
+    return this.prisma.refreshToken.deleteMany({
+      where: { tokenHash: hashedToken },
     });
   }
 

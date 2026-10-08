@@ -14,8 +14,9 @@ export interface EmailChangeRequestDTO {
   id: string;
   userId: string;
   newEmail: string;
-  ipAddress?: string;
-  userAgent?: string;
+  expiresAt?: string | Date | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
 }
 
 export interface UserDTO {
@@ -24,7 +25,10 @@ export interface UserDTO {
   lastName?: string;
   email?: string;
   loginCount?: number;
+  role?: "USER" | "ADMIN";
   emailStatus?: "VERIFIED" | "UNVERIFIED" | "BLOCKED";
+  emailChangeRequest?: EmailChangeRequestDTO | null;
+  /** @deprecated use emailChangeRequest (schema is now 1-1) */
   emailChangeRequests?: EmailChangeRequestDTO[];
   accounts?: {
     provider: string;

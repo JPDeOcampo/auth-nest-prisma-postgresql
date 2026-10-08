@@ -60,6 +60,10 @@ export class PasswordResetService {
         where: { id: account.id },
         data: { passwordHash },
       });
+      await transaction.user.update({
+        where: { id },
+        data: { passwordChangedAt: new Date() },
+      });
       await transaction.refreshToken.deleteMany({ where: { userId: id } });
       await transaction.authToken.deleteMany({
         where: { userId: id, type: "PASSWORD_RESET" },
@@ -257,6 +261,10 @@ export class PasswordResetService {
         throw new AppError("Invalid or expired session.", 400);
       }
 
+      await transaction.user.update({
+        where: { id: actualUserId },
+        data: { passwordChangedAt: new Date() },
+      });
       await transaction.refreshToken.deleteMany({
         where: { userId: actualUserId },
       });

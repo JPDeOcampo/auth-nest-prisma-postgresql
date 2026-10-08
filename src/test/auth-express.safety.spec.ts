@@ -49,6 +49,9 @@ vi.mock("@/nest/infrastructure/prisma.service.js", () => ({
     };
     emailChangeRequest = {
       create: vi.fn(),
+      upsert: vi.fn(),
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
       delete: vi.fn(),
     };
     refreshToken = {
@@ -103,6 +106,7 @@ vi.mock("@/nest/services/logout.service.js", () => ({
 vi.mock("@/nest/services/email-verification.service.js", () => ({
   EmailVerificationService: class {
     send = vi.fn();
+    sendEmailChange = vi.fn();
     resend = vi.fn();
     verify = vi.fn();
   },
@@ -160,10 +164,10 @@ describe("Express API compatibility safety net", () => {
     prisma.user.findUnique
       .mockResolvedValueOnce(currentUser)
       .mockResolvedValueOnce(null);
-    prisma.emailChangeRequest.create.mockResolvedValue(emailChangeRequest);
-    verificationProvider.send.mockResolvedValue(
-      new Date("2026-10-02T00:00:00.000Z"),
-    );
+    verificationProvider.sendEmailChange.mockResolvedValue({
+      emailChangeRequest,
+      expiresAt: new Date("2026-10-02T00:00:00.000Z"),
+    });
 
     const result = await auth.updateEmail("user_1", {
       email: " New@Example.com ",
@@ -175,13 +179,14 @@ describe("Express API compatibility safety net", () => {
       emailChangeRequest,
       expiresAt: "2026-10-02T00:00:00.000Z",
     });
-    expect(verificationProvider.send).toHaveBeenCalledWith(
+    expect(verificationProvider.sendEmailChange).toHaveBeenCalledWith(
       {
         id: "user_1",
         email: "new@example.com",
         firstName: "Jane",
         loginCount: 2,
       },
+      "new@example.com",
       "127.0.0.1",
       "test-agent",
     );
@@ -204,6 +209,11 @@ describe("Express API compatibility safety net", () => {
     const auth = app.get(NestAuthService);
     const prisma = app.get(PrismaService) as any;
     prisma.authToken.findFirst.mockResolvedValue({ id: "token_1" });
+    prisma.emailChangeRequest.findUnique.mockResolvedValue({
+      id: "change_1",
+      userId: "user_1",
+      newEmail: "new@example.com",
+    });
     prisma.emailChangeRequest.delete.mockResolvedValue({ id: "change_1" });
 
     const result = await auth.removeNewEmail("user_1", " NEW@example.com ");
@@ -213,7 +223,7 @@ describe("Express API compatibility safety net", () => {
       where: { id: "token_1" },
     });
     expect(prisma.emailChangeRequest.delete).toHaveBeenCalledWith({
-      where: { userId: "user_1", newEmail: "new@example.com" },
+      where: { userId: "user_1" },
     });
   });
 
@@ -238,12 +248,25 @@ describe("Express API compatibility safety net", () => {
   it("POST /api/v1/auth/signup returns the existing registration response", async () => {
     const prisma = app.get(PrismaService) as any;
     const verificationProvider = app.get(EmailVerificationService) as any;
-    prisma.user.findUnique.mockResolvedValue(null);
-    prisma.user.create.mockResolvedValue({
+    const createdUser = {
       id: "user_1",
       email: "jane@example.com",
       firstName: "Jane",
       loginCount: 0,
+    };
+    prisma.user.findUnique.mockResolvedValue(null);
+    // register() creates user + LOCAL account inside $transaction
+    prisma.$transaction.mockImplementation(async (cb: any) => {
+      if (typeof cb === "function") {
+        return cb({
+          ...prisma,
+          user: {
+            ...prisma.user,
+            create: prisma.user.create.mockResolvedValue(createdUser),
+          },
+        });
+      }
+      return undefined;
     });
     verificationProvider.send.mockResolvedValue(new Date());
 
@@ -325,9 +348,11 @@ describe("Express API compatibility safety net", () => {
     };
 
     prisma.account.findFirst.mockResolvedValue({
-      user,
+      userId: "user_1",
+      provider: "LOCAL",
       passwordHash: "password-hash",
     });
+    prisma.user.findUnique.mockResolvedValue(user);
     vi.mocked(verifyPassword).mockResolvedValue(true);
     sessions.generateAuthTokens.mockResolvedValue({
       accessToken: "access-token",
@@ -350,6 +375,7 @@ describe("Express API compatibility safety net", () => {
     expect(sessions.createSession).toHaveBeenCalledWith(
       "user_1",
       "refresh-token",
+      expect.anything(),
     );
   });
 

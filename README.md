@@ -9,23 +9,25 @@ is no separate Express application or legacy Express route layer.
 
 - Node.js 24 or a compatible supported release
 - PostgreSQL
+- Redis (shared throttles, reset challenges, OTP attempt caps)
 - SMTP credentials
 - Firebase Admin service-account credentials for OAuth routes
 
 ## Local setup
 
 1. Install dependencies with `pnpm install` (the repository uses `pnpm-lock.yaml`).
-2. Copy `.env.sample` to `.env` and set the local database, SMTP, and Firebase
-   values. The sample values are placeholders, not deployable credentials.
-3. Start the development server with `pnpm run dev`.
-4. Run `pnpm run typecheck`, `pnpm run lint`, and `pnpm test` before submitting
+2. Copy `.env.sample` to `.env` and set the local database, Redis, SMTP, and
+   Firebase values. The sample values are placeholders, not deployable credentials.
+3. Apply migrations with `pnpm run db:migrate:deploy` (separate release step;
+   do not run migrations automatically from every application replica).
+4. Regenerate the client after schema changes with `npx prisma generate`
+   (output: `src/generated/prisma`).
+5. Start the development server with `pnpm run dev`.
+6. Run `pnpm run typecheck`, `pnpm run lint`, and `pnpm test` before submitting
    changes.
 
 The default API port is `5000`. The frontend origin and backend origin are
-configured by `ORIGIN` and `BACKEND_URL`. The Prisma schema and checked-in
-migrations are under `prisma/`; run `pnpm run db:migrate:deploy` as a separate
-release step before starting new application code. Do not run migrations
-automatically from every application replica at startup.
+configured by `ORIGIN` and `BACKEND_URL`.
 
 ## Project structure
 
@@ -42,12 +44,92 @@ src/
     guards/                       Authentication guards
     filters/                      HTTP exception mapping
     utils/, constants/, types/    Nest-owned shared helpers and contracts
+  generated/prisma/               Generated Prisma client (do not edit)
+prisma/
+  schema.prisma                   Data model (enums, models, indexes)
+  migrations/                     Checked-in migrations
 ```
 
 Feature services use constructor-injected providers. Prisma is lifecycle-managed
 by Nest and is not instantiated as a process-wide singleton. Auth and user
 controllers retain the `/api/v1` routes and response shapes. Password-reset
 challenge IDs are opaque values, not database user IDs.
+
+## Data model (`prisma/schema.prisma`)
+
+Enums: `AuthProvider` (`LOCAL`, `GOOGLE`, `GITHUB`), `UserRole`
+(`USER`, `ADMIN`), `UserStatus` (`ACTIVE`, `SUSPENDED`, `BANNED`, `DELETED`),
+`EmailStatus` (`UNVERIFIED`, `VERIFIED`, `BLOCKED`), `AppearanceType`
+(`COLOR`, `IMAGE`), `AuthTokenType` (`PASSWORD_RESET`, `EMAIL_VERIFICATION`).
+
+- `User`: `email` is unique and always stored lowercase + trimmed.
+  Tracks `role`, `status`, `emailStatus`, `emailVerifiedAt`,
+  `passwordChangedAt` (set on every password change), `deletedAt`
+  (set when `status = DELETED`), `loginCount`/`loginAttempts`,
+  `lockoutUntil`, `lastLoginAt`. Indexed on `status`.
+- `Account`: one row per (`userId`, `provider`); unique on
+  (`provider`, `providerAccountId`). `LOCAL` rows are keyed by the **user id**
+  (not the email, so email changes need no account sync); OAuth rows use the
+  provider subject id. `passwordHash` is set only for `LOCAL`.
+- `EmailChangeRequest`: at most **one pending request per user**
+  (`userId @unique`). `newEmail` is intentionally **not** unique (prevents
+  address reservation); `User.email`'s unique constraint wins at confirm
+  time. Carries its own `tokenHash @unique`, `expiresAt`, `confirmedAt`.
+- `AuthToken`: one-time tokens (`EMAIL_VERIFICATION`, `PASSWORD_RESET`)
+  storing only the SHA-256 `tokenHash`. Indexed on (`userId`, `type`) and
+  (`type`, `expiresAt`).
+- `RefreshToken`: stores only `tokenHash`. Rotation with reuse detection:
+  all tokens descended from one login share a `familyId`; presenting a
+  revoked/expired token revokes the whole family (`revokedAt`) and forces
+  re-login. `replacedById` links each rotation. TTL 7 days, max 5 active
+  sessions per user. Indexed on `userId`, `familyId`, `expiresAt`.
+- `AuditLog`: append-only, no FK (history survives user deletion).
+  Indexed on (`userId`, `createdAt`) and (`event`, `createdAt`).
+
+Two CHECK constraints must be added in a custom migration
+(`prisma migrate dev --create-only`, then edit `migration.sql`):
+
+```sql
+ALTER TABLE "User" ADD CONSTRAINT user_email_lowercase
+  CHECK (email = lower(email));
+
+ALTER TABLE "Account" ADD CONSTRAINT account_local_requires_password
+  CHECK (
+    (provider = 'LOCAL'  AND "passwordHash" IS NOT NULL) OR
+    (provider <> 'LOCAL' AND "passwordHash" IS NULL)
+  );
+```
+
+## Auth behavior
+
+- Access tokens expire in 15m; refresh tokens in 7d (JWT `purpose: "auth"`).
+- Register creates user + profile + settings + `LOCAL` account in one
+  transaction, then sends an `EMAIL_VERIFICATION` `AuthToken`.
+- Login resolves `User` by normalized email, then the `LOCAL` account;
+  5 bad passwords lock the account for 15 minutes. Success rotates
+  `loginCount`/`lastLoginAt` and records a refresh session with ip/ua.
+- Email change uses `sendEmailChange()`: one upserted `EmailChangeRequest`
+  plus its `EMAIL_VERIFICATION` `AuthToken` sharing the same hash/expiry;
+  verification mail goes to the **new** address. Confirming sets
+  `email = newEmail`, `emailStatus = VERIFIED`, `emailVerifiedAt`, and
+  deletes both rows. Cancelling deletes by `{ userId }`.
+- Password update/reset sets `passwordChangedAt`, deletes all refresh
+  tokens, and clears `PASSWORD_RESET` tokens.
+- Serialized users expose singular `emailChangeRequest` (not the old
+  plural array), plus `role` and `emailVerifiedAt`.
+
+## API routes
+
+Auth (`/api/v1/auth`): `POST signup`, `POST resend-verification-email/:id`,
+`GET verify-email?token=`, `POST login`, `POST oauth-login`,
+`POST refresh-token`, `POST update-email/:id`, `POST remove-new-email/:id`,
+`PUT update-password/:id`, `POST forgot-password`,
+`POST reset/verify-reset-password/:id`, `POST reset/resend-reset-password/:id`,
+`GET reset/refresh-reset-password`, `POST reset/reset-password/:id`,
+`POST delete-user/:id`, `POST delete-user-oauth/:id`, `POST single-logout`.
+
+User (`/api/v1/user`): `PUT update-profile/:id`, `PUT update-settings/:id`.
+Health: `GET /health/live`, `GET /health/ready`.
 
 ## Environment
 
@@ -108,7 +190,9 @@ limits reset OTP guesses to five per-user window, enforces cookie-origin checks
 and security headers, validates reset-token purpose and subject, uses opaque
 reset challenge IDs to avoid returning
 internal user IDs, consumes OTPs atomically, and revokes refresh/reset tokens
-after password changes. Production startup requires TLS Redis, TLS PostgreSQL,
+after password changes. Refresh reuse revokes the whole token family, and
+the hardened migration adds lowercase-email and LOCAL-password CHECK
+constraints. Production startup requires TLS Redis, TLS PostgreSQL,
 and explicit proxy trust configuration.
 
 Current defaults are 600 requests per IP per 15 minutes for `/api/v1`, 120 for
