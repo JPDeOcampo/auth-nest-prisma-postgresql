@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { generateSecureToken } from "@/nest/infrastructure/token.utils.js";
+import { generateSecureToken } from "@/infrastructure/token/token.utils.js";
 
 describe("secure token hashing", () => {
   it("uses the password pepper for low-entropy reset codes", () => {

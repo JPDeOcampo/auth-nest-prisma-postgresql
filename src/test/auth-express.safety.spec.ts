@@ -29,7 +29,7 @@ vi.mock("firebase-admin", () => ({
   },
 }));
 
-vi.mock("@/nest/infrastructure/prisma.service.js", () => ({
+vi.mock("@/infrastructure/prisma/prisma.service.js", () => ({
   PrismaService: class {
     user = {
       findUnique: vi.fn(),
@@ -64,14 +64,14 @@ vi.mock("@/nest/infrastructure/prisma.service.js", () => ({
   },
 }));
 
-vi.mock("@/nest/services/session-token.service.js", () => ({
+vi.mock("@/modules/auth/services/session-token.service.js", () => ({
   SessionTokenService: class {
     generateAuthTokens = vi.fn();
     createSession = vi.fn();
   },
 }));
 
-vi.mock("@/nest/infrastructure/firebase.service.js", () => ({
+vi.mock("@/infrastructure/firebase/firebase.service.js", () => ({
   FirebaseService: class {
     authClient = {
       verifyIdToken: vi.fn(),
@@ -82,28 +82,28 @@ vi.mock("@/nest/infrastructure/firebase.service.js", () => ({
   },
 }));
 
-vi.mock("@/nest/utils/password-hashing.js", async (importOriginal) => {
+vi.mock("@/common/utils/password-hashing.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("@/nest/utils/password-hashing.js")>();
+    await importOriginal<typeof import("@/common/utils/password-hashing.js")>();
   return {
     ...actual,
     verifyPassword: vi.fn(),
   };
 });
 
-vi.mock("@/nest/services/token.service.js", () => ({
+vi.mock("@/modules/auth/services/token.service.js", () => ({
   NestTokenService: class {
     refreshToken = vi.fn();
   },
 }));
 
-vi.mock("@/nest/services/logout.service.js", () => ({
+vi.mock("@/modules/auth/services/logout.service.js", () => ({
   LogoutService: class {
     userSingleLogout = vi.fn();
   },
 }));
 
-vi.mock("@/nest/services/email-verification.service.js", () => ({
+vi.mock("@/modules/auth/services/email-verification.service.js", () => ({
   EmailVerificationService: class {
     send = vi.fn();
     sendEmailChange = vi.fn();
@@ -112,7 +112,7 @@ vi.mock("@/nest/services/email-verification.service.js", () => ({
   },
 }));
 
-vi.mock("@/nest/services/password-reset.service.js", () => ({
+vi.mock("@/modules/auth/services/password-reset.service.js", () => ({
   PasswordResetService: class {
     updatePassword = vi.fn();
     forgotPassword = vi.fn();
@@ -124,15 +124,15 @@ vi.mock("@/nest/services/password-reset.service.js", () => ({
 }));
 
 import { createApp } from "@/main.js";
-import { PrismaService } from "@/nest/infrastructure/prisma.service.js";
-import { NestTokenService } from "@/nest/services/token.service.js";
-import { LogoutService } from "@/nest/services/logout.service.js";
-import { EmailVerificationService } from "@/nest/services/email-verification.service.js";
-import { SessionTokenService } from "@/nest/services/session-token.service.js";
-import { FirebaseService } from "@/nest/infrastructure/firebase.service.js";
-import { NestAuthService } from "@/nest/services/auth.service.js";
-import { PasswordResetService } from "@/nest/services/password-reset.service.js";
-import { verifyPassword } from "@/nest/utils/password-hashing.js";
+import { PrismaService } from "@/infrastructure/prisma/prisma.service.js";
+import { NestTokenService } from "@/modules/auth/services/token.service.js";
+import { LogoutService } from "@/modules/auth/services/logout.service.js";
+import { EmailVerificationService } from "@/modules/auth/services/email-verification.service.js";
+import { SessionTokenService } from "@/modules/auth/services/session-token.service.js";
+import { FirebaseService } from "@/infrastructure/firebase/firebase.service.js";
+import { NestAuthService } from "@/modules/auth/services/auth.service.js";
+import { PasswordResetService } from "@/modules/auth/services/password-reset.service.js";
+import { verifyPassword } from "@/common/utils/password-hashing.js";
 
 describe("Express API compatibility safety net", () => {
   let app: Awaited<ReturnType<typeof createApp>>;

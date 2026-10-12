@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateEnvironment } from "@/nest/config/environment.js";
+import { validateEnvironment } from "@/config/environment.js";
 
 const validEnvironmentBase = {
   NODE_ENV: "production",

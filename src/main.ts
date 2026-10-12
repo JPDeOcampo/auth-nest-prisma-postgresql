@@ -12,9 +12,9 @@ import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import { RedisStore, type RedisReply } from "rate-limit-redis";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { AppModule } from "@/app.module.js";
-import { AppExceptionFilter } from "@/nest/filters/app-exception.filter.js";
-import { validateEnvironment } from "@/nest/config/environment.js";
-import { RedisService } from "@/nest/infrastructure/redis.service.js";
+import { AppExceptionFilter } from "@/common/filters/app-exception.filter.js";
+import { validateEnvironment } from "@/config/environment.js";
+import { RedisService } from "@/infrastructure/redis/redis.service.js";
 
 const asRedisData = (value: unknown): boolean | number | string => {
   if (

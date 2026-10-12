@@ -29,7 +29,7 @@ vi.mock("firebase-admin", () => ({
   },
 }));
 
-vi.mock("@/nest/services/auth.service.js", () => ({
+vi.mock("@/modules/auth/services/auth.service.js", () => ({
   NestAuthService: class {
     register = vi.fn();
     login = vi.fn();
@@ -44,7 +44,7 @@ vi.mock("@/nest/services/auth.service.js", () => ({
   },
 }));
 
-vi.mock("@/nest/services/password.service.js", () => ({
+vi.mock("@/modules/auth/services/password.service.js", () => ({
   NestPasswordService: class {
     updatePassword = vi.fn();
     forgotPassword = vi.fn();
@@ -55,14 +55,14 @@ vi.mock("@/nest/services/password.service.js", () => ({
   },
 }));
 
-vi.mock("@/nest/services/token.service.js", () => ({
+vi.mock("@/modules/auth/services/token.service.js", () => ({
   NestTokenService: class {
     generateAuthTokens = vi.fn();
     refreshToken = vi.fn();
   },
 }));
 
-vi.mock("@/nest/services/user-profile.service.js", () => ({
+vi.mock("@/modules/user/services/user-profile.service.js", () => ({
   NestUserProfileService: class {
     updateProfile = vi.fn();
     updateSettings = vi.fn();
@@ -70,11 +70,11 @@ vi.mock("@/nest/services/user-profile.service.js", () => ({
 }));
 
 import { createApp } from "@/main.js";
-import { getAuthToken } from "@/nest/utils/request-context.js";
-import { appendSetCookie } from "@/nest/utils/cookies.js";
-import { NestAuthService } from "@/nest/services/auth.service.js";
-import { NestPasswordService } from "@/nest/services/password.service.js";
-import { NestUserProfileService } from "@/nest/services/user-profile.service.js";
+import { getAuthToken } from "@/common/utils/request-context.js";
+import { appendSetCookie } from "@/common/utils/cookies.js";
+import { NestAuthService } from "@/modules/auth/services/auth.service.js";
+import { NestPasswordService } from "@/modules/auth/services/password.service.js";
+import { NestUserProfileService } from "@/modules/user/services/user-profile.service.js";
 
 describe("Nest auth compatibility layer", () => {
   let app: Awaited<ReturnType<typeof createApp>>;

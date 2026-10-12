@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { PasswordResetService } from "@/nest/services/password-reset.service.js";
+import { PasswordResetService } from "@/modules/auth/services/password-reset.service.js";
 
 describe("Nest password reset provider", () => {
   it("returns an opaque challenge for unknown accounts without exposing an internal ID", async () => {

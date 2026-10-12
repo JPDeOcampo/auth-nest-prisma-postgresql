@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { RedisService } from "@/nest/infrastructure/redis.service.js";
+import { RedisService } from "@/infrastructure/redis/redis.service.js";
 
 describe("RedisService reset challenge behavior", () => {
   let redis: RedisService;

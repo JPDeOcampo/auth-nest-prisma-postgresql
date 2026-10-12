@@ -11,6 +11,10 @@
 
     "paths": {
       "@/*": ["./src/*"],
+      "@config/*": ["./src/config/*"],
+      "@common/*": ["./src/common/*"],
+      "@modules/*": ["./src/modules/*"],
+      "@infrastructure/*": ["./src/infrastructure/*"]
     },
 
     "types": ["node"],
